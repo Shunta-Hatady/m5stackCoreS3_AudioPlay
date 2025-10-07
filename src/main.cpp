@@ -5,8 +5,8 @@
 #include <WiFi.h>
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "ntp.nict.jp", 9 * 3600, 60000);  // JST（日本時間）同期
-const char* ssid     = "嵐";         // ここにWi-FiのSSIDを入力
-const char* password = "jpexdapyu0e2";     // ここにWi-Fiのパスワードを入力
+const char* ssid     = "ssid";         // ここにWi-FiのSSIDを入力
+const char* password = "password";     // ここにWi-Fiのパスワードを入力
 // ==== SDピン設定 ====
 #define SD_SPI_SCK_PIN  (36)
 #define SD_SPI_MISO_PIN (35)
@@ -304,4 +304,5 @@ void loop() {
 
       }
 }
+
   
