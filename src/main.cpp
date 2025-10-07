@@ -1,7 +1,12 @@
 #include <M5CoreS3.h>
 #include <SPI.h>
 #include <SD.h>
-
+#include<NTPClient.h>
+#include <WiFi.h>
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "ntp.nict.jp", 9 * 3600, 60000);  // JST（日本時間）同期
+const char* ssid     = "嵐";         // ここにWi-FiのSSIDを入力
+const char* password = "jpexdapyu0e2";     // ここにWi-Fiのパスワードを入力
 // ==== SDピン設定 ====
 #define SD_SPI_SCK_PIN  (36)
 #define SD_SPI_MISO_PIN (35)
@@ -26,13 +31,47 @@ struct WAVHeader {
 };
 
 // ==== ダブルバッファリング設定 ====
-static int16_t* stereoBuffer;
+static int16_t* stereoBuffer;// ステレオデータ用バッファ
 static int16_t* monoBuffer[2];  // 2つのバッファを交互に使用
 static constexpr size_t BUFFER_SIZE = 16384;  // さらに増量（約1秒分 @ 16kHz）
 static int currentBuffer = 0;
 
+bool isPlayingWAV = false;
+bool isPeriodicWAV = false;
+bool isModeSelect = false;
+int Mode = 0;
+int w,h;
+
+void selectModeButton(int w, int h)
+{
+  M5.Lcd.fillRect(0, 2 * h / 3, w / 3, h / 3, RED);
+  M5.Lcd.fillRect(w / 3, 2 * h / 3, w / 3, h / 3, BLUE);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(w / 6 - 30, h - 20);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.printf("Change");
+
+  M5.Lcd.setCursor(w / 2 - 20, h - 20);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.printf("Decide");
+
+
+}
+
+
 // ==== WAV再生関数（ダブルバッファリング版）====
 void playWAVfromSD(const char* filePath) {
+  
+    // ==== メモリ確保（ダブルバッファ）====
+    stereoBuffer = (int16_t*)heap_caps_malloc(BUFFER_SIZE * 2 * sizeof(int16_t), MALLOC_CAP_8BIT);
+    monoBuffer[0] = (int16_t*)heap_caps_malloc(BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_8BIT);
+    monoBuffer[1] = (int16_t*)heap_caps_malloc(BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_8BIT);
+    
+    if (!stereoBuffer || !monoBuffer[0] || !monoBuffer[1]) {
+        Serial.println("Failed to allocate buffers!");
+        M5.Display.println("MEMORY ERROR!");
+        while (1);
+    }
     File file = SD.open(filePath);
     if (!file) {
         Serial.printf("Failed to open %s\n", filePath);
@@ -121,8 +160,8 @@ void playWAVfromSD(const char* filePath) {
     }
 
     // 後処理
-    M5.Speaker.end();
-    M5.Mic.begin();
+    // M5.Speaker.end();
+    // M5.Mic.begin();
     file.close();
 
     Serial.println("Playback done.");
@@ -132,10 +171,8 @@ void playWAVfromSD(const char* filePath) {
 void setup() {
     M5.begin();
     Serial.begin(115200);
-    M5.Display.setRotation(1);
-    M5.Display.setTextSize(2);
-    M5.Display.println("WAV Player - M5CoreS3");
-    M5.Display.println("Double Buffering Mode");
+    w=M5.Lcd.width();
+    h=M5.Lcd.height();
 
     // ==== SD初期化 ====
     SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
@@ -144,31 +181,127 @@ void setup() {
         M5.Display.println("SD FAILED!");
         while (1) delay(100);
     }
-    Serial.println("SD Card initialized.");
-    M5.Display.println("SD OK");
+    selectModeButton(w,h);
 
-    // ==== メモリ確保（ダブルバッファ）====
-    stereoBuffer = (int16_t*)heap_caps_malloc(BUFFER_SIZE * 2 * sizeof(int16_t), MALLOC_CAP_8BIT);
-    monoBuffer[0] = (int16_t*)heap_caps_malloc(BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_8BIT);
-    monoBuffer[1] = (int16_t*)heap_caps_malloc(BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_8BIT);
-    
-    if (!stereoBuffer || !monoBuffer[0] || !monoBuffer[1]) {
-        Serial.println("Failed to allocate buffers!");
-        M5.Display.println("MEMORY ERROR!");
-        while (1);
-    }
 
-    Serial.printf("Buffer allocated: %d samples x 2\n", BUFFER_SIZE);
-    M5.Display.println("Playing...");
-
-    // ==== WAVファイル再生 ====
-    playWAVfromSD("/test.wav");
-    
-    M5.Display.println("Done!");
 }
+    
 
-// ==== ループ ====
+  // ==== ループ ====
 void loop() {
     M5.update();
     delay(100);
+    bool fastwhile = true;
+    while(!isModeSelect){
+      M5.update();
+      auto tp = M5.Touch.getDetail();
+      int giBattery = M5.Power.getBatteryLevel();
+      if(fastwhile){
+        M5.Lcd.clear();
+        selectModeButton(w,h);
+        fastwhile = false;
+      }
+       if (tp.wasReleased() && tp.y > 2 * h / 3)
+      { 
+        if (tp.x < w / 3 )
+        { // A:モード変更
+          Mode++;
+          M5.Lcd.clear();
+          M5.Lcd.setCursor(0, 0);
+          M5.Lcd.setTextSize(2);
+          M5.Lcd.println("Battery: " + String(giBattery) + "%");
+          M5.Lcd.println("");
+
+          selectModeButton(w,h);
+        
+        if (Mode > 2)
+          {
+            Mode = 0;
+          }
+
+        }
+        else if (tp.x < 2 * w / 3 )
+        { // B:決定
+          isModeSelect = true;
+        }
+        if(Mode == 0){
+          M5.Lcd.setCursor(0, h/2);
+          M5.Lcd.setTextSize(2.5);
+          M5.Lcd.println("Mode:matukareTime");
+        }else if(Mode == 1){
+            M5.Lcd.setCursor(0, h/2);
+            M5.Lcd.setTextSize(2.5);
+            M5.Lcd.println("Mode:MatukareAlarm");
+        }else if(Mode == 2){
+            M5.Lcd.setCursor(0, h/2);
+            M5.Lcd.setTextSize(2.5);
+            M5.Lcd.println("Mode:MatukareClock");
+        }
+    }
+    }
+    if(isModeSelect){
+      M5.Lcd.clear();
+      switch (Mode)
+      {
+        case 0:
+        {
+          M5.Lcd.setCursor(0, h/2);
+          M5.Lcd.setTextSize(2.5);
+          M5.Lcd.println("Mode:matukareTime");
+          playWAVfromSD("/test.wav");
+          break;
+        }
+        case 1:
+        {
+          M5.Lcd.setCursor(0, h/2);
+          M5.Lcd.setTextSize(2.5);
+          M5.Lcd.println("Mode:MatukareAlarm");
+          int start=millis();
+          unsigned long lastPlay = millis();
+          while (millis() - start < 3600000) { // 1時間ループ
+              if (millis() - lastPlay >= 600000) { // 10分ごと
+                  playWAVfromSD("/test.wav");
+                  lastPlay = millis();
+              }
+              M5.update();
+          }
+            delay(10);
+
+            break;
+        }
+        case 2:
+        { 
+            // ==== Wi-Fi接続 ====
+            WiFi.begin(ssid, password);
+            M5.Lcd.println("Connecting Wi-Fi...");
+            while (WiFi.status() != WL_CONNECTED) {
+                delay(500);
+                M5.Lcd.print(".");
+            }
+            M5.Lcd.println("\nWi-Fi Connected!");
+            timeClient.begin();
+            timeClient.update();
+            M5.Lcd.setCursor(0, h/2);
+            M5.Lcd.setTextSize(2.5);
+            M5.Lcd.println("matukareClock");
+            while (1) {
+                timeClient.update();
+                int minute = timeClient.getMinutes();
+                int second = timeClient.getSeconds();
+
+                // 毎正時に再生（例: 10:00:00）
+                if (minute == 0 && second == 0) {
+                    playWAVfromSD("/test.wav");
+                    delay(1000);  // 1秒待って二重再生防止
+                }
+                delay(500);
+                M5.update();
+            }
+            break;
+          }
+        }
+        isModeSelect = false;
+
+      }
 }
+  
